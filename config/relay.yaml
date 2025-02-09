@@ -1,0 +1,40 @@
+exporters:
+  otlphttp:
+    endpoint: ${HTTP_ENDPOINT}
+    headers:
+      authorization: ${AUTH_KEY}
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 409
+    spike_limit_mib: 128
+  transform/make-root:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(parent_span_id, SpanID(0x0000000000000000)) where
+            attributes["svcis.service_root"] != nil
+receivers:
+  jaeger:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:14250
+      thrift_compact:
+        endpoint: 0.0.0.0:6831
+      thrift_http:
+        endpoint: 0.0.0.0:14268
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
