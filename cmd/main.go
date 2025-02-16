@@ -12,10 +12,15 @@ import (
 	"go-microservices-observability/internal/services/inventory"
 	"go-microservices-observability/internal/services/notification"
 	order_service "go-microservices-observability/internal/services/order"
+	"go-microservices-observability/pkg/diagnostics"
 	"go-microservices-observability/pkg/tracing"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -79,6 +84,13 @@ func main() {
 		}
 	}()
 
+	diagnosticsServer := diagnostics.NewServer(9000)
+	go func() {
+		if err := diagnosticsServer.Start(); err != nil {
+			log.Println(err)
+		}
+	}()
+
 	userClient := user.NewClient(&user.Config{
 		Address:    "http://localhost:8081",
 		HTTPClient: &http.Client{},
@@ -86,8 +98,34 @@ func main() {
 	})
 
 	orderRestAPIServer := order_rest.NewServer(orderService, orderRestAPITracer, userClient)
+	go func() {
+		err := orderRestAPIServer.ListenAndServe(8080)
+		if err != nil {
+			log.Println(err)
+		}
+	}()
 
-	if err := orderRestAPIServer.ListenAndServe(8080); err != nil {
-		panic(err)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-sigCh
+
+	log.Println("Shutting down servers...", sig)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err = diagnosticsServer.Shutdown(ctx)
+	if err != nil {
+		log.Println(err)
 	}
+
+	err = orderRestAPIServer.Shutdown(ctx)
+	if err != nil {
+		log.Println(err)
+	}
+
+	err = userRestAPI.Shutdown(ctx)
+	if err != nil {
+		log.Println(err)
+	}
+
+	cancel()
 }
