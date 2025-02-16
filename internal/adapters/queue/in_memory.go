@@ -21,9 +21,17 @@ func NewInMemoryQueue() Queue {
 
 // Publish publishes a message to the queue on a specific topic.
 func (q *InMemoryQueue) Publish(topic string, message interface{}) error {
-	jsonMessage, err := json.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message to JSON: %w", err)
+	var messageBytes []byte
+	var err error
+
+	switch m := message.(type) {
+	case []byte:
+		messageBytes = m
+	default:
+		messageBytes, err = json.Marshal(message)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message to JSON: %w", err)
+		}
 	}
 
 	q.mu.RLock()
@@ -34,7 +42,7 @@ func (q *InMemoryQueue) Publish(topic string, message interface{}) error {
 		return fmt.Errorf("topic %s does not exist", topic)
 	}
 
-	topicChan <- jsonMessage
+	topicChan <- messageBytes
 	return nil
 }
 

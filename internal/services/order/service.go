@@ -2,12 +2,16 @@ package order
 
 import (
 	"context"
+	"encoding/json"
 	"go-microservices-observability/internal/adapters/queue"
-	"go-microservices-observability/internal/adapters/repository/order"
+	orderRepo "go-microservices-observability/internal/adapters/repository/order"
 	"go-microservices-observability/internal/domain"
 	"go-microservices-observability/internal/services/inventory"
 	"go-microservices-observability/internal/services/notification"
 	"go-microservices-observability/pkg/tracing"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 type Service interface {
@@ -16,16 +20,26 @@ type Service interface {
 	Update(ctx context.Context, order *domain.Order) error
 	Delete(ctx context.Context, id string) error
 	List(ctx context.Context) ([]*domain.Order, error)
+	Shutdown()
 }
 
 type service struct {
-	repo        order.Repository
+	repo        orderRepo.Repository
 	tracer      tracing.Tracer
 	queueClient queue.Queue
+	worker      *orderRepo.OutboxWorker
 }
 
-func NewService(repo order.Repository, tracer tracing.Tracer, queueClient queue.Queue) Service {
-	return &service{repo: repo, tracer: tracer, queueClient: queueClient}
+func NewService(repo orderRepo.Repository, tracer tracing.Tracer, queueClient queue.Queue) Service {
+	worker := orderRepo.NewOutboxWorker(repo, queueClient, 1*time.Second)
+	worker.Start()
+
+	return &service{
+		repo:        repo,
+		tracer:      tracer,
+		queueClient: queueClient,
+		worker:      worker,
+	}
 }
 
 func (s *service) Create(ctx context.Context, order *domain.Order) error {
@@ -37,17 +51,41 @@ func (s *service) Create(ctx context.Context, order *domain.Order) error {
 		return err
 	}
 
-	err = s.queueClient.Publish(inventory.DeductItemsTopic, inventory.DeductItemsMessage{
+	// Create inventory deduction message
+	deductItemsMsg := inventory.DeductItemsMessage{
 		ProductIDs:  order.ProductIDs,
 		SpanContext: tracing.NewSpanContext(span.SpanContext()),
-	})
+	}
+	deductItemsBytes, err := json.Marshal(deductItemsMsg)
 	if err != nil {
-		return nil
+		return err
 	}
 
-	err = s.queueClient.Publish(notification.SendNotificationTopic, notification.SendNotificationMessage{
+	// Store inventory message in outbox
+	err = s.repo.StoreOutboxMessage(ctx, &orderRepo.OutboxMessage{
+		ID:      uuid.New().String(),
+		Topic:   inventory.DeductItemsTopic,
+		Message: deductItemsBytes,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Create notification message
+	notificationMsg := notification.SendNotificationMessage{
 		UserID:      "test",
 		SpanContext: tracing.NewSpanContext(span.SpanContext()),
+	}
+	notificationBytes, err := json.Marshal(notificationMsg)
+	if err != nil {
+		return err
+	}
+
+	// Store notification message in outbox
+	err = s.repo.StoreOutboxMessage(ctx, &orderRepo.OutboxMessage{
+		ID:      uuid.New().String(),
+		Topic:   notification.SendNotificationTopic,
+		Message: notificationBytes,
 	})
 	if err != nil {
 		return err
@@ -82,4 +120,10 @@ func (s *service) List(ctx context.Context) ([]*domain.Order, error) {
 	defer span.End()
 
 	return s.repo.List(ctx)
+}
+
+func (s *service) Shutdown() {
+	if s.worker != nil {
+		s.worker.Stop()
+	}
 }

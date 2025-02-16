@@ -14,14 +14,15 @@ import (
 	order_service "go-microservices-observability/internal/services/order"
 	"go-microservices-observability/pkg/diagnostics"
 	"go-microservices-observability/pkg/tracing"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -125,6 +126,11 @@ func main() {
 	err = userRestAPI.Shutdown(ctx)
 	if err != nil {
 		log.Println(err)
+	}
+
+	// Shutdown order service and its worker
+	if svc, ok := orderService.(order_service.Service); ok {
+		svc.Shutdown()
 	}
 
 	cancel()
