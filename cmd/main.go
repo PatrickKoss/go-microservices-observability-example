@@ -129,9 +129,7 @@ func main() {
 	}
 
 	// Shutdown order service and its worker
-	if svc, ok := orderService.(order_service.Service); ok {
-		svc.Shutdown()
-	}
+	orderService.Shutdown()
 
 	cancel()
 }
